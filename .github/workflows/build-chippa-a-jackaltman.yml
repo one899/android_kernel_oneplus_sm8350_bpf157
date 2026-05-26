@@ -6,23 +6,19 @@ on:
 
 jobs:
   build-kernel:
-    name: Oneplus 9 RT - ${{ matrix.name }} - ${{ matrix.author }}
+    name: Oneplus 9 RT - bpf157-btf - one899
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - repo: "https://github.com/one899/android_kernel_oneplus_sm8350_bpf157.git"
-            modules_repo: "https://github.com/JackA1ltman/android_kernel_modules_and_devicetree_oneplus_sm8350.git"
             command: "LLVM=1 LLVM_IAS=1"
             branch: "master"
-            modules_branch: "oneplus/sm8350_b_16.0.0_oneplus9rt"
             name: "bpf157-btf"
             author: "one899"
             device: "oneplus9rt-coloros16"
             defconfig: "9rt_defconfig"
             device_codename: "martini"
-            ksu: false
-            kpm: false
       fail-fast: false
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -44,12 +40,9 @@ jobs:
           sudo apt install git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler cpio coccinelle -y
           sudo apt-get install zstd libc6 binutils libc6-dev-i386 gcc g++ p7zip p7zip-full -y
           sudo apt install -y pahole
-
-          # Install Libtinfo5
           curl -C - --progress-bar -L http://launchpadlibrarian.net/580830584/libtinfo5_6.3-2_amd64.deb -o libtinfo5.deb
           sudo apt install ./libtinfo5.deb
           rm -f libtinfo5.deb
-
           sudo apt install python3 -y
           sudo rm -rf /usr/bin/python
           sudo ln -s /usr/bin/python3 /usr/bin/python
@@ -57,10 +50,8 @@ jobs:
       - name: Get build tools
         run: |
           cd $GITHUB_WORKSPACE
-
           git clone "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git" -b "android12L-release" gcc-64 --depth=1
           git clone "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9.git" -b "android12L-release" gcc-32 --depth=1
-
           git clone "https://github.com/prorooter007/android_prebuilts_clang_host_linux-x86_clang-6877366.git" -b "11.0" "clang-custom" --depth 1
 
       - name: Setup ccache
@@ -73,9 +64,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           git clone -b "${{ matrix.branch }}" "${{ matrix.repo }}" kernel/msm-5.4 --depth 1
-          git clone -b "${{ matrix.modules_branch }}" "${{ matrix.modules_repo }}" modules --depth 1
-          mv modules/vendor ./
-          rm -rf modules
 
       - name: Get Packing Tools
         run: |
@@ -85,39 +73,23 @@ jobs:
       - name: Enable BTF + BPF157
         run: |
           cd $GITHUB_WORKSPACE/kernel/msm-5.4
-
-          # BPF157 UAPI from reference kernel (JackAltman OPPO SM8350)
-          curl -LSs "https://raw.githubusercontent.com/JackA1ltman/android_kernel_oppo_sm8350/refs/heads/oneplus/sm8350v_15.0.0_oneplus9pro/include/uapi/linux/bpf.h" -o include/uapi/linux/bpf.h
-
-          # BTF config
           echo "CONFIG_DEBUG_INFO=y" >> arch/arm64/configs/${{ matrix.defconfig }}
           echo "CONFIG_DEBUG_INFO_BTF=y" >> arch/arm64/configs/${{ matrix.defconfig }}
-
-          # Fix 1: mm.h CONT_PTES for x86 host tools
           sed -i '/^#define _LINUX_MM_H$/a\#ifndef CONFIG_ARM64\n#define CONT_PTES 0\n#define CONT_PTE_SIZE 0\n#define CONT_PTE_MASK 0\n#define CONT_PTE_SHIFT 0\n#define pte_cont(x) 0\n#define TIF_32BIT 0\nstatic inline int of_reserved_mem_device_is_init(void *d){return 1;}\n#endif' include/linux/mm.h
-
-          # Fix 2: mutex.h android_vendor
           grep -q "android_vendor" include/linux/mutex.h || sed -i '1i #include <linux/android_vendor.h>' include/linux/mutex.h
-
-          # Fix 3: bpf-cgroup.h bpf_link
           grep -q "struct bpf_link;" include/linux/bpf-cgroup.h || sed -i '1i struct bpf_link;' include/linux/bpf-cgroup.h
-
-          # Fix 4: perf_event.h stub
           echo "#define perf_allow_cpu(x) 0" >> include/linux/perf_event.h
 
       - name: Build Kernel
         run: |
           cd $GITHUB_WORKSPACE/kernel/msm-5.4
-
           export PATH=$GITHUB_WORKSPACE/clang-custom/bin:$PATH
-
           make CC="ccache clang" O=out ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- BRAND_SHOW_FLAG=oneplus ${{ matrix.command }} CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc-32/bin/arm-linux-androideabi- ${{ matrix.defconfig }}
           make -j$(nproc --all) CC="ccache clang" CLANG_TRIPLE=aarch64-linux-gnu- BRAND_SHOW_FLAG=oneplus ${{ matrix.command }} STRIP=llvm-strip CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc-32/bin/arm-linux-androideabi- O=out ARCH=arm64 2>&1|tee error.log
 
       - name: Make Anykernel3 - Perfix
         run: |
           cd $GITHUB_WORKSPACE/kernel/msm-5.4
-
           sed -i 's/ExampleKernel by osm0sis @ xda-developers/ColorOS 16 Kernel 5.4.295 BPF157 BTF by one899/g' Anykernel3/anykernel.sh
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' Anykernel3/anykernel.sh
           sed -i 's!BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;!BLOCK=auto;!g' Anykernel3/anykernel.sh
@@ -126,42 +98,34 @@ jobs:
       - name: Make Anykernel3 Flasher - NoDTB
         run: |
           TIME=$(date +"%Y%m%d%H%M%S")
-
           cd $GITHUB_WORKSPACE/kernel/msm-5.4
           mkdir -p tmp
-
           cp -fp $GITHUB_WORKSPACE/kernel/msm-5.4/out/arch/arm64/boot/Image tmp
-
           cp -rp ./Anykernel3/* tmp
           cd tmp
           7za a -mx9 tmp.zip *
           cd ..
           cp -fp tmp/tmp.zip ${{ matrix.device }}-${{ matrix.author }}-${{ matrix.name }}-$TIME.zip
           rm -rf tmp
-
           echo "PACK_NAME=${{ matrix.device }}-${{ matrix.author }}-${{ matrix.name }}-$TIME.zip" >> $GITHUB_ENV
 
       - name: Make Anykernel3 Flasher - DTB
         run: |
           TIME=$(date +"%Y%m%d%H%M%S")
-
           cd $GITHUB_WORKSPACE/kernel/msm-5.4
           mkdir -p tmp
-
           cp -fp $GITHUB_WORKSPACE/kernel/msm-5.4/out/arch/arm64/boot/Image tmp
           cp -fp $GITHUB_WORKSPACE/kernel/msm-5.4/out/arch/arm64/boot/dts/vendor/oplus/${{ matrix.device_codename }}/dtb tmp
           cp -fp $GITHUB_WORKSPACE/kernel/msm-5.4/out/arch/arm64/boot/dts/vendor/oplus/${{ matrix.device_codename }}/dtbo.img tmp
-
           cp -rp ./Anykernel3/* tmp
           cd tmp
           7za a -mx9 tmp.zip *
           cd ..
           cp -fp tmp/tmp.zip ${{ matrix.device }}-${{ matrix.author }}-${{ matrix.name }}-$TIME-DTB.zip
           rm -rf tmp
-
           echo "PACK_NAME_DTB=${{ matrix.device }}-${{ matrix.author }}-${{ matrix.name }}-$TIME-DTB.zip" >> $GITHUB_ENV
 
-      - name: Upload Build Artifacts For Anykernel3
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Kernel-${{ matrix.device }}-${{ matrix.author }}-${{ matrix.name }}
